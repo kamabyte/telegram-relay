@@ -1,0 +1,12 @@
+services:
+  relay:
+    build: .
+    restart: unless-stopped
+    environment:
+      RELAY_ALLOWED_IPS: ${RELAY_ALLOWED_IPS:-}
+      RELAY_ALLOWED_METHODS: ${RELAY_ALLOWED_METHODS:-[A-Za-z]+}
+      RELAY_ALLOW_FILES: ${RELAY_ALLOW_FILES:-true}
+      RELAY_MAX_BODY_SIZE: ${RELAY_MAX_BODY_SIZE:-50m}
+      RELAY_READ_TIMEOUT: ${RELAY_READ_TIMEOUT:-60s}
+    expose:
+      - "80"

@@ -1,0 +1,67 @@
+# Relay for the Telegram Bot API: forwards /bot<token>/<method> and
+# /file/bot<token>/<path> to api.telegram.org.
+# TLS is terminated by the reverse proxy in front (e.g. Traefik in Dokploy).
+
+# Client IP comes from X-Forwarded-For set by the reverse proxy.
+include /etc/nginx/relay/trusted-proxies.conf;
+real_ip_header X-Forwarded-For;
+
+# Clients allowed to use the relay (evaluated after real_ip).
+geo $relay_client_allowed {
+    default 0;
+    include /etc/nginx/relay/allowlist.conf;
+}
+
+map "${RELAY_ALLOW_FILES}" $relay_files_enabled {
+    true    1;
+    default 0;
+}
+
+# Access log with the bot token masked (URLs contain it).
+map $request_uri $relay_masked_uri {
+    "~^/(?<file_prefix>file/)?bot(?<bot_id>[0-9]+):[^/]+(?<bot_rest>/.*)?$" "/${file_prefix}bot${bot_id}:***${bot_rest}";
+    default $request_uri;
+}
+log_format relay '$remote_addr [$time_local] "$request_method $relay_masked_uri" '
+                 '$status $body_bytes_sent $request_time';
+
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+
+    access_log /dev/stdout relay;
+    # Error log lines include the raw request line (with the token), keep only critical ones.
+    error_log /dev/stderr crit;
+    server_tokens off;
+    client_max_body_size ${RELAY_MAX_BODY_SIZE};
+
+    proxy_set_header Host api.telegram.org;
+    proxy_set_header X-Forwarded-For "";
+    proxy_set_header X-Real-IP "";
+    proxy_ssl_server_name on;
+    proxy_ssl_verify on;
+    proxy_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;
+    proxy_connect_timeout 5s;
+    proxy_read_timeout ${RELAY_READ_TIMEOUT};
+    proxy_request_buffering off;
+
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    location ~ ^/bot[0-9]+:[A-Za-z0-9_-]+/(${RELAY_ALLOWED_METHODS})$ {
+        if ($relay_client_allowed = 0) { return 403; }
+        proxy_pass https://api.telegram.org;
+    }
+
+    location ~ ^/file/bot[0-9]+:[A-Za-z0-9_-]+/ {
+        if ($relay_files_enabled = 0) { return 404; }
+        if ($relay_client_allowed = 0) { return 403; }
+        proxy_pass https://api.telegram.org;
+    }
+
+    location / { return 404; }
+}
